@@ -1,0 +1,234 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Koya Clinic | Appointment Booking</title>
+
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #f4f7fb;
+            margin: 0;
+            padding: 30px 15px;
+            color: #243047;
+        }
+
+        .container {
+            max-width: 750px;
+            margin: auto;
+        }
+
+        h1 {
+            color: #174c75;
+        }
+
+        .slot, .booking-form {
+            background: white;
+            padding: 20px;
+            margin: 15px 0;
+            border-radius: 10px;
+            box-shadow: 0 2px 8px #00000010;
+        }
+
+        button {
+            background: #1769aa;
+            color: white;
+            border: none;
+            padding: 12px 18px;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+
+        button:disabled {
+            background: #999;
+            cursor: not-allowed;
+        }
+
+        input {
+            display: block;
+            width: 100%;
+            box-sizing: border-box;
+            padding: 12px;
+            margin: 10px 0 15px;
+            border: 1px solid #ccd3dd;
+            border-radius: 6px;
+        }
+
+        .message {
+            margin-top: 15px;
+            padding: 12px;
+            border-radius: 6px;
+        }
+
+        .error {
+            background: #ffe8e8;
+            color: #a32222;
+        }
+
+        .success {
+            background: #e5f7eb;
+            color: #176b35;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>Koya Clinic</h1>
+        <p>Choose an available appointment and book your visit.</p>
+
+        <h2>Available Appointment Slots</h2>
+        <div id="slots">
+            Loading appointment slots...
+        </div>
+
+        <section class="booking-form">
+            <h2>Book an Appointment</h2>
+
+            <form id="bookingForm">
+                <label for="slot">Selected appointment</label>
+                <input id="slot" name="slot_id" readonly required>
+
+                <label for="name">Full name</label>
+                <input id="name" name="name" required>
+
+                <label for="email">Email address</label>
+                <input id="email" name="email" type="email" required>
+
+                <button type="submit" id="bookButton">
+                    Book Appointment
+                </button>
+            </form>
+
+            <div id="message" aria-live="polite"></div>
+        </section>
+    </div>
+
+    <script>
+        const slotsContainer = document.getElementById("slots");
+        const slotInput = document.getElementById("slot");
+        const form = document.getElementById("bookingForm");
+        const message = document.getElementById("message");
+        const bookButton = document.getElementById("bookButton");
+        let pendingIdempotencyKey = null;
+        let pendingRequestBody = null;
+
+        async function loadSlots() {
+            try {
+                const response = await fetch("/web/slots");
+
+                if (!response.ok) {
+                    throw new Error("Could not load appointment slots.");
+                }
+
+                const data = await response.json();
+                slotsContainer.innerHTML = "";
+
+                if (data.slots.length === 0) {
+                    slotsContainer.textContent = "No appointment slots available.";
+                    return;
+                }
+
+                data.slots.forEach(slot => {
+                    const card = document.createElement("div");
+                    card.className = "slot";
+
+                    const provider = document.createElement("h3");
+                    provider.textContent = slot.provider;
+
+                    const date = document.createElement("p");
+                    date.textContent =
+                        new Date(slot.start).toLocaleString();
+
+                    const status = document.createElement("p");
+                    status.textContent = slot.available
+                        ? "Available"
+                        : "Already booked";
+
+                    card.append(provider, date, status);
+
+                    if (slot.available) {
+                        const button = document.createElement("button");
+                        button.textContent = "Select this slot";
+
+                        button.addEventListener("click", () => {
+                            slotInput.value = slot.id;
+                            message.textContent = "";
+                            document.getElementById("name").focus();
+                        });
+
+                        card.appendChild(button);
+                    }
+
+                    slotsContainer.appendChild(card);
+                });
+            } catch (error) {
+                slotsContainer.textContent = error.message;
+            }
+        }
+
+        form.addEventListener("submit", async event => {
+            event.preventDefault();
+
+            if (!slotInput.value) {
+                message.textContent = "Please select an appointment slot.";
+                message.className = "message error";
+                return;
+            }
+
+            bookButton.disabled = true;
+            bookButton.textContent = "Booking...";
+
+            try {
+                const requestBody = {
+                    slot_id: slotInput.value,
+                    name: document.getElementById("name").value,
+                    email: document.getElementById("email").value
+                };
+
+                const requestBodyString = JSON.stringify(requestBody);
+
+                if (!pendingIdempotencyKey || pendingRequestBody !== requestBodyString) {
+                    pendingIdempotencyKey = crypto.randomUUID();
+                    pendingRequestBody = requestBodyString;
+                }
+
+                const response = await fetch("/web/bookings", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "Idempotency-Key": pendingIdempotencyKey
+                    },
+                    body: requestBodyString
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.error || "Booking failed.");
+                }
+
+                message.className = "message success";
+                message.textContent =
+                    `Booking confirmed! Your booking ID is ${data.id}.`;
+                pendingIdempotencyKey = null;
+                pendingRequestBody = null;
+
+                form.reset();
+                await loadSlots();
+
+            } catch (error) {
+                message.className = "message error";
+                message.textContent = error.message;
+            } finally {
+                bookButton.disabled = false;
+                bookButton.textContent = "Book Appointment";
+            }
+        });
+
+        loadSlots();
+    </script>
+</body>
+</html>
